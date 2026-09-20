@@ -4,70 +4,34 @@ set -euo pipefail
 
 source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/base-test.sh"
 
-TMPDIR=""
-QS_PID=""
+test_root=$(mktemp -d)
+runtime_root=$(mktemp -d)
 
 cleanup() {
-  if [[ -n $QS_PID ]] && kill -0 "$QS_PID" 2>/dev/null; then
-    kill "$QS_PID" 2>/dev/null || true
-    wait "$QS_PID" 2>/dev/null || true
-  fi
-  if [[ -n $TMPDIR && -d $TMPDIR ]]; then
-    rm -rf "$TMPDIR"
-  fi
+  rm -rf -- "$test_root" "$runtime_root"
 }
 trap cleanup EXIT
 
-require_compositor "lock focus test"
+chmod 700 "$runtime_root"
+cp "$SHELL_TEST_DIR/fixtures/lock-focus/shell.qml" "$test_root/shell.qml"
+ln -s "$ROOT/shell/plugins/lock" "$test_root/LockPlugin"
+ln -s "$ROOT/shell/Ui" "$test_root/Ui"
+ln -s "$ROOT/shell/Commons" "$test_root/Commons"
+mkdir -p "$test_root/home"
 
-if ! command -v quickshell >/dev/null 2>&1; then
-  pass "quickshell not installed; skipping lock focus test"
-  exit 0
-fi
+output=$(
+  HOME="$test_root/home" \
+    XDG_RUNTIME_DIR="$runtime_root" \
+    QT_QPA_PLATFORM=offscreen \
+    QT_QUICK_BACKEND=software \
+    QT_QPA_PLATFORMTHEME= \
+    DISPLAY= \
+    WAYLAND_DISPLAY= \
+    OMARCHY_PATH="$ROOT" \
+    timeout 10s quickshell -p "$test_root" --no-color 2>&1
+) || fail "lock focus fixture exits cleanly" "$output"
 
-require_command jq
-
-TMPDIR=$(mktemp -d)
-result="$TMPDIR/result.json"
-log="$TMPDIR/quickshell.log"
-config_dir="$TMPDIR/lock-focus"
-mkdir -p "$config_dir" "$TMPDIR/home"
-cp "$SHELL_TEST_DIR/fixtures/lock-focus/shell.qml" "$config_dir/shell.qml"
-ln -s "$ROOT/shell/Ui" "$config_dir/Ui"
-ln -s "$ROOT/shell/Commons" "$config_dir/Commons"
-
-OMARCHY_PATH="$ROOT" \
-OMARCHY_QML_TEST_RESULT="$result" \
-HOME="$TMPDIR/home" \
-XDG_CONFIG_HOME="$TMPDIR/home/.config" \
-XDG_CACHE_HOME="$TMPDIR/home/.cache" \
-XDG_STATE_HOME="$TMPDIR/home/.local/state" \
-QML2_IMPORT_PATH="$ROOT/shell${QML2_IMPORT_PATH:+:$QML2_IMPORT_PATH}" \
-QML_IMPORT_PATH="$ROOT/shell${QML_IMPORT_PATH:+:$QML_IMPORT_PATH}" \
-PATH="$ROOT/bin:$PATH" \
-  quickshell -p "$config_dir" --no-color >"$log" 2>&1 &
-QS_PID=$!
-
-for _ in {1..80}; do
-  [[ -s $result ]] && break
-  if ! kill -0 "$QS_PID" 2>/dev/null; then
-    sed -n '1,220p' "$log" >&2
-    fail "lock focus quickshell exited before writing result"
-  fi
-  sleep 0.1
-done
-
-[[ -s $result ]] || {
-  sed -n '1,220p' "$log" >&2
-  fail "lock focus test timed out"
-}
-
-if ! jq -e '.ok == true' "$result" >/dev/null; then
-  printf 'Lock focus result:\n' >&2
-  jq . "$result" >&2
-  printf 'Lock focus log:\n' >&2
-  sed -n '1,220p' "$log" >&2
-  fail "lock password input reclaims focus without a pointer click"
-fi
+rg -q "LOCK_FOCUS_TEST_PASS" <<<"$output" ||
+  fail "lock password input reclaims focus without a pointer click" "$output"
 
 pass "lock password input reclaims focus without a pointer click"
