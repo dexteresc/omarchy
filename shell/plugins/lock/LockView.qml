@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Effects
+import QtQuick.Window
 import qs.Commons
 import qs.Ui
 
@@ -52,6 +53,15 @@ Item {
     passwordInput.forceActiveFocus()
   }
 
+  function ensurePasswordFocus() {
+    var window = root.Window.window
+    if (!window || !window.active || !root.inputEnabled || root.authenticatingPassword
+        || window.activeFocusItem === passwordInput)
+      return
+
+    root.forcePasswordFocus()
+  }
+
   function clearPassword() {
     passwordTextEdited("")
   }
@@ -70,6 +80,24 @@ Item {
   Component.onCompleted: {
     syncPasswordText()
     if (inputEnabled) Qt.callLater(forcePasswordFocus)
+  }
+
+  // The session-lock surface is the only interactive surface while locked,
+  // but output teardown during suspend can leave its window active without an
+  // active focus item. Reclaim focus whenever the window becomes active or
+  // focus moves away from the enabled password input.
+  Connections {
+    id: windowFocus
+    target: root.Window.window
+
+    function onActiveChanged() {
+      if (windowFocus.target && windowFocus.target.active)
+        Qt.callLater(root.ensurePasswordFocus)
+    }
+
+    function onActiveFocusItemChanged() {
+      Qt.callLater(root.ensurePasswordFocus)
+    }
   }
 
   // Measures the masked password at full size; passwordDotScale compares this
